@@ -43,7 +43,7 @@ class MainActivity : ComponentActivity() {
                                 if (running) {
                                     DropNoteServer.stop()
                                 } else {
-                                    DropNoteServer.start()
+                                    DropNoteServer.start(this@MainActivity)
                                 }
 
                                 running = !running
