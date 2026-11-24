@@ -5,14 +5,16 @@ import android.content.Context
 import com.example.dropnote.model.CreateNoteRequest
 import com.example.dropnote.server.NoteStorage
 import io.ktor.http.ContentType
-import io.ktor.server.engine.*
-import io.ktor.server.cio.*
-import io.ktor.server.application.*
-import io.ktor.server.routing.*
-import io.ktor.server.response.*
-import io.ktor.server.request.*
-import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.*
+import io.ktor.server.application.*
+import io.ktor.server.cio.*
+import io.ktor.server.engine.*
+import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
+import kotlinx.serialization.json.Json
 
 object DropNoteServer {
 
@@ -25,7 +27,10 @@ object DropNoteServer {
 
         server = embeddedServer(CIO, port = 8080, host = "0.0.0.0") {
             install(ContentNegotiation) {
-                json()
+                json(Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                })
             }
 
             routing {
@@ -55,16 +60,40 @@ object DropNoteServer {
                 }
 
                 post("/api/notes") {
-                    val request = call.receive<CreateNoteRequest>()
-
-                    if (request.text.isBlank()) {
+                    try {
+                        val request = call.receive<CreateNoteRequest>()
+                        when (val result = NoteStorage.addNote(request)) {
+                            is NoteStorage.AddNoteResult.Success -> {
+                                call.respond(HttpStatusCode.Created, result.note)
+                            }
+                            is NoteStorage.AddNoteResult.Error -> {
+                                call.respondText(
+                                    result.message,
+                                    status = HttpStatusCode.BadRequest
+                                )
+                            }
+                        }
+                    } catch (e: Exception) {
                         call.respondText(
-                            "Note cannot be empty",
-                            status = io.ktor.http.HttpStatusCode.BadRequest
+                            "Invalid request format",
+                            status = HttpStatusCode.BadRequest
                         )
+                    }
+                }
+
+                post("/api/notes/{id}/like") {
+                    val noteId = call.parameters["id"]
+                    val action = call.request.queryParameters["action"] ?: "like"
+                    if (noteId.isNullOrBlank()) {
+                        call.respondText("Missing note ID", status = HttpStatusCode.BadRequest)
+                        return@post
+                    }
+
+                    val updated = NoteStorage.toggleLike(noteId, increment = (action == "like"))
+                    if (updated != null) {
+                        call.respond(updated)
                     } else {
-                        val note = NoteStorage.addNote(request.text.trim())
-                        call.respond(note)
+                        call.respondText("Note not found", status = HttpStatusCode.NotFound)
                     }
                 }
             }

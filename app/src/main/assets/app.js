@@ -19,7 +19,7 @@ let selectedColor = "blue";
 let activeFilter = "all";
 let searchQuery = "";
 const likedNoteIds = new Set();
-const MAX_FILE_SIZE_MB = 10;
+const MAX_FILE_SIZE_MB = 1;
 
 // View & Theme Elements
 const landingView = document.getElementById("landing-view");
@@ -347,23 +347,42 @@ function renderNotes(notes) {
     reactBtn.className = `react-btn ${isLiked ? "liked" : ""}`;
     reactBtn.innerHTML = `${isLiked ? "&#9829;" : "&#9825;"} <span>${note.likes || 0}</span>`;
 
-    reactBtn.addEventListener("click", () => {
-      if (likedNoteIds.has(note.id)) {
-        likedNoteIds.delete(note.id);
-        note.likes = Math.max(0, (note.likes || 1) - 1);
-      } else {
-        likedNoteIds.add(note.id);
-        note.likes = (note.likes || 0) + 1;
-      }
-      // TODO: Optional fetch(`/notes/${note.id}/like`, { method: 'POST' })
-      renderNotes(mockNotes);
-    });
+    reactBtn.addEventListener("click", async () => {
+          const isCurrentlyLiked = likedNoteIds.has(note.id);
+          const action = isCurrentlyLiked ? "unlike" : "like";
+
+          if (isCurrentlyLiked) {
+            likedNoteIds.delete(note.id);
+            note.likes = Math.max(0, (note.likes || 1) - 1);
+          } else {
+            likedNoteIds.add(note.id);
+            note.likes = (note.likes || 0) + 1;
+          }
+          renderNotes(mockNotes);
+
+          try {
+            await fetch(`/api/notes/${encodeURIComponent(note.id)}/like?action=${action}`, {
+              method: "POST"
+            });
+          } catch (err) {
+            console.error("Failed to sync like:", err);
+          }
+        });
 
     footer.appendChild(copyBtn);
     footer.appendChild(reactBtn);
     card.appendChild(footer);
 
     notesBoard.appendChild(card);
+  });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -379,15 +398,15 @@ async function fetchNotes() {
 
     mockNotes = apiNotes.map(note => ({
       id: note.id,
-      author: "Guest",
+      author: note.author || "Guest",
       message: note.text,
-      color: "blue",
-      likes: 0,
-      fileUrl: null,
-      fileName: null,
-      fileSize: null,
-      isImage: false,
-      timestamp: new Date(note.timestamp).toLocaleString()
+      color: note.color || "blue",
+      likes: note.likes || 0,
+      fileUrl: note.fileUrl || null,
+      fileName: note.fileName || null,
+      fileSize: note.fileSize || null,
+      isImage: Boolean(note.isImage),
+      timestamp: new Date(note.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     }));
 
     connectionBanner.classList.add("hidden");
@@ -399,19 +418,15 @@ async function fetchNotes() {
   }
 }
 
-// 8. Submit New Note (Hook up Aeron's POST /notes endpoint here later)
+// 8. Submit New Note (Sends Author, Message, Color, and Optional 1MB Attachment)
 noteForm.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   const author = authorInput.value.trim();
   const message = messageInput.value.trim();
+  const selectedFile = attachmentInput.files[0];
 
-  if (!author || !message) return;
-
-  if (attachmentInput.files.length > 0) {
-    alert("Attachments are not supported by the server yet.");
-    return;
-  }
+  if (!author || (!message && !selectedFile)) return;
 
   localStorage.setItem("dropnote-author", author);
 
@@ -419,24 +434,46 @@ noteForm.addEventListener("submit", async (e) => {
   submitBtn.textContent = "Posting...";
 
   try {
+    let fileUrl = null;
+    let fileName = null;
+    let fileSize = null;
+    let isImage = false;
+
+    if (selectedFile) {
+      fileUrl = await readFileAsDataUrl(selectedFile);
+      fileName = selectedFile.name;
+      fileSize = formatBytes(selectedFile.size);
+      isImage = selectedFile.type.startsWith("image/");
+    }
+
     const response = await fetch("/api/notes", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ text: message })
+      body: JSON.stringify({
+        author: author,
+        text: message,
+        color: selectedColor,
+        fileUrl: fileUrl,
+        fileName: fileName,
+        fileSize: fileSize,
+        isImage: isImage
+      })
     });
 
     if (!response.ok) {
-      throw new Error("Failed to post note");
+      const errorText = await response.text();
+      throw new Error(errorText || "Failed to post note");
     }
 
     messageInput.value = "";
+    clearAttachmentSelection();
     await fetchNotes();
 
   } catch (err) {
     console.error(err);
-    alert("Could not post note. Please check the server.");
+    alert(err.message || "Could not post note. Please check the server.");
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = "Post to Board";
@@ -462,5 +499,4 @@ imageModal.addEventListener("click", (e) => {
   }
 });
 
-// Initialize count on load
 fetchNotes();
