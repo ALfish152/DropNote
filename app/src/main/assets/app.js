@@ -1,18 +1,5 @@
-// Temporary mock notes (will be replaced by Aeron's GET /notes API)
-let mockNotes = [
-  {
-    id: 1,
-    author: "Carl",
-    message: "Welcome to DropNote! Drop a note, attach a photo, or share documents with everyone in the room.",
-    color: "blue",
-    likes: 1,
-    fileUrl: null,
-    fileName: null,
-    fileSize: null,
-    isImage: false,
-    timestamp: "Just now"
-  }
-];
+// Live notes state synced from Ktor backend
+let mockNotes = [];
 
 // Track UI state
 let selectedColor = "blue";
@@ -20,6 +7,14 @@ let activeFilter = "all";
 let searchQuery = "";
 const likedNoteIds = new Set();
 const MAX_FILE_SIZE_MB = 10;
+
+// Persistent device ID shared across tabs on the same browser
+let clientId = localStorage.getItem("dropnote-client-id");
+if (!clientId) {
+  const isAndroidHost = navigator.userAgent.includes("DropNoteHost");
+  clientId = isAndroidHost ? "host-app" : "web-" + Math.random().toString(36).substring(2, 10);
+  localStorage.setItem("dropnote-client-id", clientId);
+}
 
 // View & Theme Elements
 const landingView = document.getElementById("landing-view");
@@ -59,7 +54,6 @@ const modalImg = document.getElementById("modal-img");
 const closeModal = document.getElementById("close-modal");
 const downloadModalBtn = document.getElementById("download-modal-btn");
 
-// Helper: Format byte sizes nicely (KB / MB)
 function formatBytes(bytes) {
   if (!bytes) return "";
   if (bytes < 1024 * 1024) {
@@ -68,7 +62,6 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Helper: Check if a filename or MIME type is an image
 function isImageAttachment(note) {
   if (typeof note.isImage === "boolean") return note.isImage;
   const target = (note.fileName || note.fileUrl || "").toLowerCase();
@@ -97,10 +90,18 @@ function toggleTheme() {
   applyTheme(isDark);
 }
 
+// Exposed for the Android host WebView so the app's single theme button controls both
+window.setHostDarkMode = function (isDark) {
+  localStorage.setItem("dropnote-dark", isDark);
+  applyTheme(Boolean(isDark));
+  if (themeToggleBtn) themeToggleBtn.style.display = "none";
+  if (landingThemeBtn) landingThemeBtn.style.display = "none";
+};
+
 themeToggleBtn.addEventListener("click", toggleTheme);
 landingThemeBtn.addEventListener("click", toggleTheme);
 
-// 2. Navigation between Landing Page and Dashboard (Syncs with Browser Back Button)
+// 2. Navigation between Landing Page and Dashboard
 function showDashboard(pushHistory = true) {
   landingView.classList.add("hidden");
   dashboardView.classList.remove("hidden");
@@ -119,11 +120,8 @@ function showLanding(pushHistory = true) {
 }
 
 enterBoardBtn.addEventListener("click", () => showDashboard(true));
-
-// Optional: Clicking the DN logo returns to landing page
 backToLanding.addEventListener("click", () => showLanding(true));
 
-// Listen for phone/browser Back and Forward buttons
 window.addEventListener("popstate", () => {
   if (window.location.hash === "#board") {
     showDashboard(false);
@@ -132,10 +130,10 @@ window.addEventListener("popstate", () => {
   }
 });
 
-// Load the right view if the user refreshes while on #board
 if (window.location.hash === "#board") {
   showDashboard(false);
 }
+
 // 3. Sticky Note Color Picker
 colorSwatches.forEach((swatch) => {
   swatch.addEventListener("click", () => {
@@ -201,7 +199,6 @@ filterPills.forEach((pill) => {
   });
 });
 
-// Helper: Copy text safely on both HTTPS and local HTTP IP addresses
 async function copyTextToClipboard(text) {
   if (navigator.clipboard && window.isSecureContext) {
     await navigator.clipboard.writeText(text);
@@ -217,7 +214,7 @@ async function copyTextToClipboard(text) {
   }
 }
 
-// 6. Render Note Cards (Applies active search & filters)
+// 6. Render Note Cards
 function renderNotes(notes) {
   notesBoard.innerHTML = "";
   noteCount.textContent = notes.length;
@@ -249,19 +246,18 @@ function renderNotes(notes) {
     const card = document.createElement("div");
     card.className = `note-card color-${note.color || "blue"}`;
 
-    // Card Header (Avatar + Author + Time)
     const cardTop = document.createElement("div");
     cardTop.className = "card-top";
 
     const avatar = document.createElement("div");
     avatar.className = "avatar-circle";
-    avatar.textContent = note.author.charAt(0).toUpperCase();
+    avatar.textContent = (note.author || "G").charAt(0).toUpperCase();
 
     const meta = document.createElement("div");
     meta.className = "card-meta";
 
     const title = document.createElement("h4");
-    title.textContent = note.author;
+    title.textContent = note.author || "Guest";
 
     const time = document.createElement("span");
     time.className = "timestamp";
@@ -273,12 +269,12 @@ function renderNotes(notes) {
     cardTop.appendChild(meta);
     card.appendChild(cardTop);
 
-    // Note Message
-    const text = document.createElement("p");
-    text.textContent = note.message;
-    card.appendChild(text);
+    if (note.message) {
+      const text = document.createElement("p");
+      text.textContent = note.message;
+      card.appendChild(text);
+    }
 
-    // Attachment Rendering (Image Lightbox OR Downloadable File Chip)
     if (note.fileUrl) {
       if (isImageAttachment(note)) {
         const img = document.createElement("img");
@@ -323,7 +319,6 @@ function renderNotes(notes) {
       }
     }
 
-    // Card Footer (Copy + Reaction)
     const footer = document.createElement("div");
     footer.className = "card-footer";
 
@@ -332,7 +327,7 @@ function renderNotes(notes) {
     copyBtn.className = "action-chip";
     copyBtn.innerHTML = "&#128203; Copy";
     copyBtn.addEventListener("click", async () => {
-      await copyTextToClipboard(note.message);
+      await copyTextToClipboard(note.message || note.fileName || "");
       copyBtn.classList.add("copied");
       copyBtn.innerHTML = "&#10003; Copied";
       setTimeout(() => {
@@ -347,16 +342,17 @@ function renderNotes(notes) {
     reactBtn.className = `react-btn ${isLiked ? "liked" : ""}`;
     reactBtn.innerHTML = `${isLiked ? "&#9829;" : "&#9825;"} <span>${note.likes || 0}</span>`;
 
-    reactBtn.addEventListener("click", () => {
-      if (likedNoteIds.has(note.id)) {
-        likedNoteIds.delete(note.id);
-        note.likes = Math.max(0, (note.likes || 1) - 1);
-      } else {
+    reactBtn.addEventListener("click", async () => {
+      const nextLiked = !likedNoteIds.has(note.id);
+      if (nextLiked) {
         likedNoteIds.add(note.id);
-        note.likes = (note.likes || 0) + 1;
+      } else {
+        likedNoteIds.delete(note.id);
       }
-      // TODO: Optional fetch(`/notes/${note.id}/like`, { method: 'POST' })
-      renderNotes(mockNotes);
+      await fetch(`/api/notes/${encodeURIComponent(note.id)}/like?liked=${nextLiked}`, {
+        method: "POST"
+      });
+      await fetchNotes();
     });
 
     footer.appendChild(copyBtn);
@@ -367,64 +363,93 @@ function renderNotes(notes) {
   });
 }
 
+// 7. Fetch Notes from Server
 async function fetchNotes() {
   try {
-    const response = await fetch("/api/notes");
-
+    const response = await fetch(`/api/notes?clientId=${encodeURIComponent(clientId)}`);
     if (!response.ok) {
       throw new Error("Failed to fetch notes");
     }
 
     const apiNotes = await response.json();
 
-    mockNotes = apiNotes.map(note => ({
+    mockNotes = apiNotes.map((note) => ({
       id: note.id,
-      author: "Guest",
-      message: note.text,
-      color: "blue",
-      likes: 0,
-      fileUrl: null,
-      fileName: null,
-      fileSize: null,
-      isImage: false,
-      timestamp: new Date(note.timestamp).toLocaleString()
+      author: note.author || "Guest",
+      message: note.text || "",
+      color: note.color || "blue",
+      likes: note.likes || 0,
+      fileUrl: note.fileUrl || null,
+      fileName: note.fileName || null,
+      fileSize: note.fileSize || null,
+      isImage: Boolean(note.isImage),
+      timestamp: new Date(note.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit"
+      })
     }));
 
     connectionBanner.classList.add("hidden");
     renderNotes(mockNotes);
-
   } catch (err) {
     console.error(err);
     connectionBanner.classList.remove("hidden");
   }
 }
 
-// 8. Submit New Note (Hook up Aeron's POST /notes endpoint here later)
+// 8. Submit New Note + Optional Photo/File Attachment
 noteForm.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   const author = authorInput.value.trim();
   const message = messageInput.value.trim();
+  const file = attachmentInput.files[0];
 
-  if (!author || !message) return;
-
-  if (attachmentInput.files.length > 0) {
-    alert("Attachments are not supported by the server yet.");
-    return;
-  }
+  if (!author || (!message && !file)) return;
 
   localStorage.setItem("dropnote-author", author);
 
   submitBtn.disabled = true;
-  submitBtn.textContent = "Posting...";
+  submitBtn.textContent = file ? "Uploading..." : "Posting...";
 
   try {
+    let attachmentData = {
+      fileUrl: null,
+      fileName: null,
+      fileSize: null,
+      isImage: false
+    };
+
+    if (file) {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const uploadResp = await fetch("/api/upload", {
+        method: "POST",
+        body: formData
+      });
+
+      if (!uploadResp.ok) {
+        throw new Error("File upload failed");
+      }
+
+      attachmentData = await uploadResp.json();
+    }
+
     const response = await fetch("/api/notes", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ text: message })
+      body: JSON.stringify({
+        author: author,
+        text: message,
+        color: selectedColor,
+        fileUrl: attachmentData.fileUrl,
+        fileName: attachmentData.fileName,
+        fileSize: attachmentData.fileSize,
+        isImage: attachmentData.isImage
+      })
     });
 
     if (!response.ok) {
@@ -432,8 +457,8 @@ noteForm.addEventListener("submit", async (e) => {
     }
 
     messageInput.value = "";
+    clearAttachmentSelection();
     await fetchNotes();
-
   } catch (err) {
     console.error(err);
     alert("Could not post note. Please check the server.");
@@ -447,10 +472,8 @@ noteForm.addEventListener("submit", async (e) => {
 refreshBtn.addEventListener("click", fetchNotes);
 
 setInterval(() => {
-  if (!dashboardView.classList.contains("hidden")) {
-    fetchNotes();
-  }
-}, 5000);
+  fetchNotes();
+}, 2000);
 
 closeModal.addEventListener("click", () => {
   imageModal.classList.add("hidden");
@@ -462,5 +485,4 @@ imageModal.addEventListener("click", (e) => {
   }
 });
 
-// Initialize count on load
 fetchNotes();
