@@ -59,4 +59,5 @@ dependencies {
     implementation("io.ktor:ktor-serialization-kotlinx-json:3.3.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("io.ktor:ktor-server-host-common:3.3.3")
+    implementation("com.google.zxing:core:3.5.3")
 }
