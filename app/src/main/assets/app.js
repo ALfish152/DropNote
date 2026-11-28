@@ -5,13 +5,15 @@ let mockNotes = [];
 let selectedColor = "blue";
 let activeFilter = "all";
 let searchQuery = "";
-const likedNoteIds = new Set();
+const likedNoteIds = new Set(
+  JSON.parse(localStorage.getItem("dropnote-liked-ids") || "[]")
+);
 const MAX_FILE_SIZE_MB = 10;
+const isAndroidHost = navigator.userAgent.includes("DropNoteHost");
 
 // Persistent device ID shared across tabs on the same browser
 let clientId = localStorage.getItem("dropnote-client-id");
 if (!clientId) {
-  const isAndroidHost = navigator.userAgent.includes("DropNoteHost");
   clientId = isAndroidHost ? "host-app" : "web-" + Math.random().toString(36).substring(2, 10);
   localStorage.setItem("dropnote-client-id", clientId);
 }
@@ -112,6 +114,7 @@ function showDashboard(pushHistory = true) {
 }
 
 function showLanding(pushHistory = true) {
+  if (isAndroidHost) return; // Keep host WebView locked to the live board
   dashboardView.classList.add("hidden");
   landingView.classList.remove("hidden");
   if (pushHistory) {
@@ -349,12 +352,12 @@ function renderNotes(notes) {
       } else {
         likedNoteIds.delete(note.id);
       }
+      localStorage.setItem("dropnote-liked-ids", JSON.stringify([...likedNoteIds]));
       await fetch(`/api/notes/${encodeURIComponent(note.id)}/like?liked=${nextLiked}`, {
         method: "POST"
       });
       await fetchNotes();
     });
-
     footer.appendChild(copyBtn);
     footer.appendChild(reactBtn);
     card.appendChild(footer);
@@ -453,7 +456,8 @@ noteForm.addEventListener("submit", async (e) => {
     });
 
     if (!response.ok) {
-      throw new Error("Failed to post note");
+      const errorText = await response.text();
+      throw new Error(errorText || "Failed to post note");
     }
 
     messageInput.value = "";
@@ -461,7 +465,7 @@ noteForm.addEventListener("submit", async (e) => {
     await fetchNotes();
   } catch (err) {
     console.error(err);
-    alert("Could not post note. Please check the server.");
+    alert(err.message || "Could not post note. Please check the server.");
   } finally {
     submitBtn.disabled = false;
     submitBtn.textContent = "Post to Board";
