@@ -137,6 +137,13 @@ object DropNoteServer {
                             part.provider().copyTo(targetFile.outputStream())
 
                             val sizeBytes = targetFile.length()
+                            if (sizeBytes > 10L * 1024 * 1024) {
+                                targetFile.delete()
+                                call.respondText("File exceeds 10 MB limit", status = HttpStatusCode.PayloadTooLarge)
+                                part.dispose()
+                                return@forEachPart
+                            }
+
                             val formattedSize = if (sizeBytes < 1024 * 1024) {
                                 String.format(Locale.US, "%.1f KB", sizeBytes / 1024.0)
                             } else {

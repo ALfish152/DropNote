@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,10 +44,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
 import com.example.dropnote.server.NoteStorage
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
+import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
@@ -116,6 +119,13 @@ class MainActivity : ComponentActivity() {
             }
 
             MaterialTheme(colorScheme = colorScheme) {
+                val view = LocalView.current
+                if (!view.isInEditMode) {
+                    SideEffect {
+                        WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+                    }
+                }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -152,6 +162,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onClearAllNotes = {
                             NoteStorage.clearAll()
+                            File(cacheDir, "dropnote_uploads").listFiles()?.forEach { it.delete() }
                             Toast.makeText(this@MainActivity, "Cleared board", Toast.LENGTH_SHORT).show()
                         },
                         onOpenFileChooser = { callback, intent ->
